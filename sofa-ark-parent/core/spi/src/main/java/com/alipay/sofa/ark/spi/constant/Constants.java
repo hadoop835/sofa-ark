@@ -48,6 +48,8 @@ public class Constants {
     public final static String       ARK_CONF_FILE                                 = "bootstrap.properties";
     public final static String       ARK_CONF_FILE_FORMAT                          = "bootstrap-%s.properties";
 
+    public final static String       ARK_CONF_YAML_FILE                            = "bootstrap.yml";
+
     public final static String       PLUGIN_EXTENSION_FORMAT                       = "PLUGIN-EXPORT[%s]";
 
     public final static String       DEFAULT_PROFILE                               = EMPTY_STR;
@@ -170,8 +172,10 @@ public class Constants {
      * Event
      */
     public final static String       BIZ_EVENT_TOPIC_AFTER_INVOKE_BIZ_START        = "AFTER-INVOKE-BIZ-START";
-    public final static String       BIZ_EVENT_TOPIC_AFTER_INVOKE_BIZ_STOP         = "AFTER-INVOKE-BIZ-STOP";
     public final static String       BIZ_EVENT_TOPIC_AFTER_BIZ_FAILED              = "BIZ_EVENT_TOPIC_AFTER_BIZ_FAILED";
+    public final static String       BIZ_EVENT_TOPIC_AFTER_INVOKE_BIZ_STOP         = "AFTER-INVOKE-BIZ-STOP";
+    public final static String       BIZ_EVENT_TOPIC_AFTER_INVOKE_BIZ_STOP_FAILED  = "AFTER-INVOKE-BIZ-STOP-FAILED";
+
     public final static String       BIZ_EVENT_TOPIC_BEFORE_RECYCLE_BIZ            = "BEFORE-RECYCLE-BIZ";
     public final static String       BIZ_EVENT_TOPIC_BEFORE_INVOKE_BIZ_START       = "BEFORE-INVOKE-BIZ-START";
     public final static String       BIZ_EVENT_TOPIC_BEFORE_INVOKE_BIZ_STOP        = "BEFORE-INVOKE-BIZ-STOP";
@@ -196,7 +200,18 @@ public class Constants {
     public final static String       EMBED_ENABLE                                  = "sofa.ark.embed.enable";
     public final static String       PLUGIN_EXPORT_CLASS_ENABLE                    = "sofa.ark.plugin.export.class.enable";
     public final static String       EMBED_STATIC_BIZ_ENABLE                       = "sofa.ark.embed.static.biz.enable";
+
+    public final static String       EMBED_STATIC_BIZ_IN_RESOURCE_ENABLE           = "sofa.ark.embed.static.biz.in.resource.enable";
     public final static String       ACTIVATE_NEW_MODULE                           = "activate.new.module";
+
+    /**
+     * uninstall the biz if it starts up failed
+     */
+    public final static String       AUTO_UNINSTALL_WHEN_FAILED_ENABLE             = "sofa.ark.auto.uninstall.when.failed.enable";
+    /**
+     * auto remove the biz instance in BizManagerService if it stops failed
+     */
+    public final static String       REMOVE_BIZ_INSTANCE_AFTER_STOP_FAILED         = "sofa.ark.remove.biz.instance.when.stop.failed.enable";
 
     /**
      * Command Provider
@@ -217,6 +232,8 @@ public class Constants {
      * Multiply biz name
      */
     public final static String       MASTER_BIZ                                    = "com.alipay.sofa.ark.master.biz";
+
+    public final static String       SOFA_ARK_MODULE                               = "SOFA-ARK/biz/";
 
     /**
      * Config Server
@@ -241,6 +258,12 @@ public class Constants {
     public final static String       EXTENSION_EXCLUDES                            = "excludes";
     public final static String       EXTENSION_EXCLUDES_GROUPIDS                   = "excludeGroupIds";
     public final static String       EXTENSION_EXCLUDES_ARTIFACTIDS                = "excludeArtifactIds";
+
+    public final static String       EXTENSION_INCLUDES                            = "includes";
+    public final static String       EXTENSION_INCLUDES_GROUPIDS                   = "includeGroupIds";
+    public final static String       EXTENSION_INCLUDES_ARTIFACTIDS                = "includeArtifactIds";
+
+    public final static String       DECLARED_LIBRARIES_WHITELIST                  = "declared.libraries.whitelist";
 
     public static final List<String> CHANNEL_QUIT                                  = new ArrayList<>();
 

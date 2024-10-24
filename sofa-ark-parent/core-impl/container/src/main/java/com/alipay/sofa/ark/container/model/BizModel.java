@@ -23,19 +23,20 @@ import com.alipay.sofa.ark.common.log.ArkLoggerFactory;
 import com.alipay.sofa.ark.common.util.AssertUtils;
 import com.alipay.sofa.ark.common.util.BizIdentityUtils;
 import com.alipay.sofa.ark.common.util.ClassLoaderUtils;
-import com.alipay.sofa.ark.loader.jar.JarUtils;
 import com.alipay.sofa.ark.common.util.ParseUtils;
 import com.alipay.sofa.ark.common.util.StringUtils;
 import com.alipay.sofa.ark.container.service.ArkServiceContainerHolder;
 import com.alipay.sofa.ark.container.service.classloader.AbstractClasspathClassLoader;
 import com.alipay.sofa.ark.exception.ArkRuntimeException;
+import com.alipay.sofa.ark.loader.jar.JarUtils;
 import com.alipay.sofa.ark.spi.constant.Constants;
 import com.alipay.sofa.ark.spi.event.biz.AfterBizStartupEvent;
+import com.alipay.sofa.ark.spi.event.biz.AfterBizStartupFailedEvent;
 import com.alipay.sofa.ark.spi.event.biz.AfterBizStopEvent;
+import com.alipay.sofa.ark.spi.event.biz.AfterBizStopFailedEvent;
 import com.alipay.sofa.ark.spi.event.biz.BeforeBizRecycleEvent;
 import com.alipay.sofa.ark.spi.event.biz.BeforeBizStartupEvent;
 import com.alipay.sofa.ark.spi.event.biz.BeforeBizStopEvent;
-import com.alipay.sofa.ark.spi.event.biz.AfterBizFailedEvent;
 import com.alipay.sofa.ark.spi.model.Biz;
 import com.alipay.sofa.ark.spi.model.BizState;
 import com.alipay.sofa.ark.spi.service.biz.BizManagerService;
@@ -56,6 +57,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static com.alipay.sofa.ark.spi.constant.Constants.BIZ_TEMP_WORK_DIR_RECYCLE_FILE_SUFFIX;
+import static com.alipay.sofa.ark.spi.constant.Constants.REMOVE_BIZ_INSTANCE_AFTER_STOP_FAILED;
 import static org.apache.commons.io.FileUtils.deleteQuietly;
 
 /**
@@ -76,6 +78,8 @@ public class BizModel implements Biz {
     private String               webContextPath;
 
     private URL[]                urls;
+
+    private URL                  bizUrl;
 
     private URL[]                pluginUrls;
 
@@ -123,7 +127,19 @@ public class BizModel implements Biz {
 
     public BizModel setBizState(BizState bizState) {
         this.bizState = bizState;
-        addStateChangeLog();
+        addStateChangeLog(StateChangeReason.UNDEFINE, "");
+        return this;
+    }
+
+    public BizModel setBizState(BizState bizState, StateChangeReason reason) {
+        this.bizState = bizState;
+        addStateChangeLog(reason, "");
+        return this;
+    }
+
+    public BizModel setBizState(BizState bizState, StateChangeReason reason, String message) {
+        this.bizState = bizState;
+        addStateChangeLog(reason, message);
         return this;
     }
 
@@ -135,6 +151,11 @@ public class BizModel implements Biz {
 
     public BizModel setClassPath(URL[] urls) {
         this.urls = urls;
+        return this;
+    }
+
+    public BizModel setBizUrl(URL url) {
+        this.bizUrl = url;
         return this;
     }
 
@@ -206,8 +227,8 @@ public class BizModel implements Biz {
         return injectExportPackages;
     }
 
-    private void addStateChangeLog() {
-        bizStateRecords.add(new BizStateRecord(new Date(), bizState));
+    private void addStateChangeLog(StateChangeReason reason, String message) {
+        bizStateRecords.add(new BizStateRecord(new Date(), bizState, reason, message));
     }
 
     @Override
@@ -233,6 +254,11 @@ public class BizModel implements Biz {
     @Override
     public URL[] getClassPath() {
         return urls;
+    }
+
+    @Override
+    public URL getBizUrl() {
+        return bizUrl;
     }
 
     @Override
@@ -316,8 +342,8 @@ public class BizModel implements Biz {
                     getIdentity(), (System.currentTimeMillis() - start));
             }
         } catch (Throwable e) {
-            setBizState(BizState.BROKEN);
-            eventAdminService.sendEvent(new AfterBizFailedEvent(this, e));
+            setBizState(BizState.BROKEN, StateChangeReason.INSTALL_FAILED, e.getMessage());
+            eventAdminService.sendEvent(new AfterBizStartupFailedEvent(this, e));
             throw e;
         } finally {
             ClassLoaderUtils.popContextClassLoader(oldClassLoader);
@@ -328,16 +354,20 @@ public class BizModel implements Biz {
         if (Boolean.getBoolean(Constants.ACTIVATE_NEW_MODULE)) {
             Biz currentActiveBiz = bizManagerService.getActiveBiz(bizName);
             if (currentActiveBiz == null) {
-                setBizState(BizState.ACTIVATED);
+                setBizState(BizState.ACTIVATED, StateChangeReason.STARTED);
             } else {
-                ((BizModel) currentActiveBiz).setBizState(BizState.DEACTIVATED);
-                setBizState(BizState.ACTIVATED);
+                ((BizModel) currentActiveBiz).setBizState(BizState.DEACTIVATED,
+                    StateChangeReason.SWITCHED,
+                    String.format("switch to new biz %s", getIdentity()));
+                setBizState(BizState.ACTIVATED, StateChangeReason.STARTED,
+                    String.format("switch from old biz: %s", currentActiveBiz.getIdentity()));
             }
         } else {
             if (bizManagerService.getActiveBiz(bizName) == null) {
-                setBizState(BizState.ACTIVATED);
+                setBizState(BizState.ACTIVATED, StateChangeReason.STARTED);
             } else {
-                setBizState(BizState.DEACTIVATED);
+                setBizState(BizState.DEACTIVATED, StateChangeReason.STARTED,
+                    "start but is deactivated");
             }
         }
     }
@@ -353,35 +383,59 @@ public class BizModel implements Biz {
         }
         ClassLoader oldClassLoader = ClassLoaderUtils.pushContextClassLoader(this.classLoader);
         if (bizState == BizState.ACTIVATED) {
-            setBizState(BizState.DEACTIVATED);
+            setBizState(BizState.DEACTIVATED, StateChangeReason.KILLING);
         }
         EventAdminService eventAdminService = ArkServiceContainerHolder.getContainer().getService(
             EventAdminService.class);
+
+        boolean isStopFailed = false;
+        long start = System.currentTimeMillis();
         try {
             // this can trigger uninstall handler
-            long start = System.currentTimeMillis();
             ArkLoggerFactory.getDefaultLogger().info("Ark biz {} stops.", getIdentity());
             eventAdminService.sendEvent(new BeforeBizStopEvent(this));
             ArkLoggerFactory.getDefaultLogger().info("Ark biz {} stopped in {} ms", getIdentity(),
                 (System.currentTimeMillis() - start));
+        } catch (Throwable t) {
+            // handle stop failed
+            ArkLoggerFactory.getDefaultLogger().info("Ark biz {} stop failed in {} ms",
+                getIdentity(), (System.currentTimeMillis() - start));
+            isStopFailed = true;
+            setBizState(BizState.BROKEN, StateChangeReason.UN_INSTALL_FAILED);
+            eventAdminService.sendEvent(new AfterBizStopFailedEvent(this, t));
+            throw t;
         } finally {
-            BizManagerService bizManagerService = ArkServiceContainerHolder.getContainer()
-                .getService(BizManagerService.class);
-            bizManagerService.unRegisterBiz(bizName, bizVersion);
-            setBizState(BizState.UNRESOLVED);
-            eventAdminService.sendEvent(new BeforeBizRecycleEvent(this));
-            urls = null;
-            denyImportPackages = null;
-            denyImportClasses = null;
-            denyImportResources = null;
-            recycleBizTempWorkDir(bizTempWorkDir);
-            bizTempWorkDir = null;
-            if (classLoader instanceof AbstractClasspathClassLoader) {
-                ((AbstractClasspathClassLoader) classLoader).clearCache();
+            boolean removeInstanceAfterStopFailed = Boolean.parseBoolean(ArkConfigs.getStringValue(
+                REMOVE_BIZ_INSTANCE_AFTER_STOP_FAILED, "true"));
+            // 只有成功后才清理, 或者失败后允许清理的情况，失败后如果不允许情况则不执行清理
+
+            if (!isStopFailed || (isStopFailed && removeInstanceAfterStopFailed)) {
+                BizManagerService bizManagerService = ArkServiceContainerHolder.getContainer()
+                    .getService(BizManagerService.class);
+                bizManagerService.unRegisterBiz(bizName, bizVersion);
+                setBizState(BizState.UNRESOLVED, StateChangeReason.STOPPED);
+                eventAdminService.sendEvent(new BeforeBizRecycleEvent(this));
+                urls = null;
+                denyImportPackages = null;
+                denyImportClasses = null;
+                denyImportResources = null;
+                // close classloader
+                if (classLoader instanceof AbstractClasspathClassLoader) {
+                    try {
+                        ((AbstractClasspathClassLoader) classLoader).close();
+                        ((AbstractClasspathClassLoader) classLoader).clearCache();
+                    } catch (IOException e) {
+                        ArkLoggerFactory.getDefaultLogger().warn(
+                            "Ark biz {} close biz classloader fail", getIdentity());
+                    }
+                }
+                eventAdminService.sendEvent(new AfterBizStopEvent(this));
+                eventAdminService.unRegister(classLoader);
+                classLoader = null;
+                recycleBizTempWorkDir(bizTempWorkDir);
+                bizTempWorkDir = null;
             }
-            classLoader = null;
             ClassLoaderUtils.popContextClassLoader(oldClassLoader);
-            eventAdminService.sendEvent(new AfterBizStopEvent(this));
         }
     }
 
@@ -412,8 +466,9 @@ public class BizModel implements Biz {
 
     @Override
     public String toString() {
-        return "Ark Biz: " + getIdentity() + ",\n classloader: " + classLoader
-               + ",\n current state: " + bizState + ",\n history states: " + bizStateRecords;
+        return "Ark Biz: " + getIdentity() + ",\n biz url: " + bizUrl + ",\n classloader: "
+               + classLoader + ",\n current state: " + bizState + ",\n history states: "
+               + bizStateRecords;
     }
 
     private void resetProperties() {

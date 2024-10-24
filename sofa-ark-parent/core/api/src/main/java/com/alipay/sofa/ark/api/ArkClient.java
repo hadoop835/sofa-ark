@@ -47,6 +47,8 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
+import static com.alipay.sofa.ark.spi.constant.Constants.AUTO_UNINSTALL_WHEN_FAILED_ENABLE;
+
 /**
  * API used to operate biz
  *
@@ -206,12 +208,19 @@ public class ArkClient {
                 String.format("Install Biz: %s fail,cost: %s ms, started at: %s",
                     biz.getIdentity(), end - start, startDate));
             getLogger().error(response.getMessage(), throwable);
-            try {
-                biz.stop();
-            } catch (Throwable e) {
-                getLogger().error(String.format("UnInstall Biz: %s fail.", biz.getIdentity()), e);
-            } finally {
-                bizManagerService.unRegisterBizStrictly(biz.getBizName(), biz.getBizVersion());
+
+            boolean autoUninstall = Boolean.parseBoolean(ArkConfigs.getStringValue(
+                AUTO_UNINSTALL_WHEN_FAILED_ENABLE, "true"));
+            if (autoUninstall) {
+                try {
+                    getLogger().error(
+                        String.format("Start Biz: %s failed, try to unInstall this biz.",
+                            biz.getIdentity()));
+                    biz.stop();
+                } catch (Throwable e) {
+                    getLogger().error(String.format("UnInstall Biz: %s fail.", biz.getIdentity()),
+                        e);
+                }
             }
             throw throwable;
         }
@@ -249,8 +258,6 @@ public class ArkClient {
                 getLogger().error(String.format("UnInstall Biz: %s fail.", biz.getIdentity()),
                     throwable);
                 throw throwable;
-            } finally {
-                bizManagerService.unRegisterBizStrictly(biz.getBizName(), biz.getBizVersion());
             }
             response.setCode(ResponseCode.SUCCESS).setMessage(
                 String.format("Uninstall biz: %s success.", biz.getIdentity()));
