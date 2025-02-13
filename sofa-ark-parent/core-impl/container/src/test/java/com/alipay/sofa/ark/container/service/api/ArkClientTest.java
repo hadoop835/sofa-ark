@@ -16,14 +16,20 @@
  */
 package com.alipay.sofa.ark.container.service.api;
 
+import com.alipay.sofa.ark.api.ArkClient;
 import com.alipay.sofa.ark.api.ArkConfigs;
 import com.alipay.sofa.ark.api.ClientResponse;
+import com.alipay.sofa.ark.common.util.FileUtils;
 import com.alipay.sofa.ark.container.BaseTest;
 import com.alipay.sofa.ark.container.service.biz.BizManagerServiceImpl;
+import com.alipay.sofa.ark.exception.ArkRuntimeException;
+import com.alipay.sofa.ark.loader.JarBizArchive;
+import com.alipay.sofa.ark.loader.archive.JarFileArchive;
+import com.alipay.sofa.ark.loader.jar.JarFile;
+import com.alipay.sofa.ark.spi.archive.BizArchive;
+import com.alipay.sofa.ark.spi.constant.Constants;
 import com.alipay.sofa.ark.spi.event.ArkEvent;
-import com.alipay.sofa.ark.spi.model.Biz;
-import com.alipay.sofa.ark.spi.model.BizInfo;
-import com.alipay.sofa.ark.spi.model.BizOperation;
+import com.alipay.sofa.ark.spi.model.*;
 import com.alipay.sofa.ark.spi.replay.Replay;
 import com.alipay.sofa.ark.spi.service.biz.BizFactoryService;
 import com.alipay.sofa.ark.spi.service.biz.BizManagerService;
@@ -33,32 +39,21 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.io.File;
+import java.io.InputStream;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
-import static com.alipay.sofa.ark.api.ArkClient.checkBiz;
-import static com.alipay.sofa.ark.api.ArkClient.checkOperation;
-import static com.alipay.sofa.ark.api.ArkClient.createBizSaveFile;
-import static com.alipay.sofa.ark.api.ArkClient.getArguments;
-import static com.alipay.sofa.ark.api.ArkClient.getBizFactoryService;
-import static com.alipay.sofa.ark.api.ArkClient.getBizManagerService;
-import static com.alipay.sofa.ark.api.ArkClient.getPluginManagerService;
-import static com.alipay.sofa.ark.api.ArkClient.installBiz;
-import static com.alipay.sofa.ark.api.ArkClient.installOperation;
-import static com.alipay.sofa.ark.api.ArkClient.invocationReplay;
-import static com.alipay.sofa.ark.api.ArkClient.setBizFactoryService;
-import static com.alipay.sofa.ark.api.ArkClient.setBizManagerService;
-import static com.alipay.sofa.ark.api.ArkClient.switchOperation;
-import static com.alipay.sofa.ark.api.ArkClient.uninstallBiz;
-import static com.alipay.sofa.ark.api.ArkClient.uninstallOperation;
-import static com.alipay.sofa.ark.api.ResponseCode.REPEAT_BIZ;
-import static com.alipay.sofa.ark.api.ResponseCode.SUCCESS;
+import static com.alipay.sofa.ark.api.ArkClient.*;
+import static com.alipay.sofa.ark.api.ResponseCode.*;
 import static com.alipay.sofa.ark.common.util.FileUtils.copyInputStreamToFile;
 import static com.alipay.sofa.ark.spi.constant.Constants.ACTIVATE_NEW_MODULE;
 import static com.alipay.sofa.ark.spi.constant.Constants.AUTO_UNINSTALL_WHEN_FAILED_ENABLE;
 import static com.alipay.sofa.ark.spi.constant.Constants.CONFIG_BIZ_URL;
 import static com.alipay.sofa.ark.spi.constant.Constants.EMBED_ENABLE;
+import static com.alipay.sofa.ark.spi.constant.Constants.ACTIVATE_MULTI_BIZ_VERSION_ENABLE;
 import static com.alipay.sofa.ark.spi.model.BizOperation.OperationType.CHECK;
 import static com.alipay.sofa.ark.spi.model.BizOperation.OperationType.INSTALL;
 import static com.alipay.sofa.ark.spi.model.BizOperation.OperationType.SWITCH;
@@ -70,6 +65,7 @@ import static java.lang.System.setProperty;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
@@ -89,6 +85,12 @@ public class ArkClientTest extends BaseTest {
     private URL bizUrl2;
     // bizName=biz-demo, bizVersion=3.0.0
     private URL bizUrl3;
+    // bizName=biz-demo, bizVersion=4.0.0
+    private URL bizUrl4;
+    // bizName=biz-demo, bizVersion=5.0.0
+    private URL bizUrl5;
+    // samplePlugin
+    private URL samplePlugin;
 
     @Before
     public void before() {
@@ -99,6 +101,12 @@ public class ArkClientTest extends BaseTest {
         bizUrl2 = this.getClass().getClassLoader().getResource("sample-ark-2.0.0-ark-biz.jar");
         // bizName=biz-demo, bizVersion=3.0.0
         bizUrl3 = this.getClass().getClassLoader().getResource("sample-ark-3.0.0-ark-biz.jar");
+        // bizName=biz-demo, bizVersion=4.0.0
+        bizUrl4 = this.getClass().getClassLoader().getResource("sample-ark-4.0.0-ark-biz.jar");
+        // bizName=biz-demo, bizVersion=5.0.0
+        bizUrl5 = this.getClass().getClassLoader().getResource("sample-ark-5.0.0-ark-biz.jar");
+        // samplePlugin
+        samplePlugin = this.getClass().getClassLoader().getResource("sample-plugin.jar");
     }
 
     @Test
@@ -150,6 +158,17 @@ public class ArkClientTest extends BaseTest {
         assertEquals(SUCCESS, response.getCode());
         bizInfo = response.getBizInfos().iterator().next();
         assertEquals(ACTIVATED, bizInfo.getBizState());
+
+        // test install biz with same bizName and different bizVersion and keep old module state
+        setProperty(ACTIVATE_MULTI_BIZ_VERSION_ENABLE, "true");
+        File bizFile4 = createBizSaveFile("biz-demo", "4.0.0");
+        copyInputStreamToFile(bizUrl4.openStream(), bizFile4);
+        response = installBiz(bizFile4);
+        assertEquals(SUCCESS, response.getCode());
+        BizManagerService bizManagerService = arkServiceContainer
+            .getService(BizManagerService.class);
+        assertSame(bizManagerService.getBiz("biz-demo", "3.0.0").getBizState(), ACTIVATED);
+        setProperty(ACTIVATE_MULTI_BIZ_VERSION_ENABLE, "");
     }
 
     @Test
@@ -197,12 +216,12 @@ public class ArkClientTest extends BaseTest {
         // test check all biz
         ClientResponse response = checkBiz();
         assertEquals(SUCCESS, response.getCode());
-        assertEquals(3, response.getBizInfos().size());
+        assertEquals(4, response.getBizInfos().size());
 
         // test check specified bizName
         response = checkBiz("biz-demo");
         assertEquals(SUCCESS, response.getCode());
-        assertEquals(3, response.getBizInfos().size());
+        assertEquals(4, response.getBizInfos().size());
 
         // test check specified bizName and version
         response = checkBiz("biz-demo", "2.0.0");
@@ -213,6 +232,10 @@ public class ArkClientTest extends BaseTest {
         assertEquals(1, response.getBizInfos().size());
 
         response = checkBiz("biz-demo", "4.0.0");
+        assertEquals(SUCCESS, response.getCode());
+        assertEquals(1, response.getBizInfos().size());
+
+        response = checkBiz("biz-demo", "5.0.0");
         assertEquals(SUCCESS, response.getCode());
         assertEquals(0, response.getBizInfos().size());
     }
@@ -228,7 +251,7 @@ public class ArkClientTest extends BaseTest {
         // test check all biz
         response = checkBiz();
         assertEquals(SUCCESS, response.getCode());
-        assertEquals(2, response.getBizInfos().size());
+        assertEquals(3, response.getBizInfos().size());
     }
 
     @Test
@@ -242,7 +265,7 @@ public class ArkClientTest extends BaseTest {
         // test check all biz
         response = checkBiz();
         assertEquals(SUCCESS, response.getCode());
-        assertEquals(2, response.getBizInfos().size());
+        assertEquals(3, response.getBizInfos().size());
     }
 
     @Test
@@ -255,10 +278,10 @@ public class ArkClientTest extends BaseTest {
         setBizFactoryService(bizFactoryServiceMock);
         Biz biz = mock(Biz.class);
         doThrow(new IllegalArgumentException()).when(biz).start(any());
-        when(bizFactoryServiceMock.createBiz((File) any())).thenReturn(biz);
+        when(bizFactoryServiceMock.createBiz((File) any(), (BizConfig) any())).thenReturn(biz);
 
         try {
-            installBiz(bizFile, null);
+            installBiz(bizFile, new BizConfig());
             assertTrue(false);
         } catch (Throwable e) {
             setBizFactoryService(bizFactoryService);
@@ -285,6 +308,40 @@ public class ArkClientTest extends BaseTest {
     }
 
     @Test
+    public void testInstallOperationWithDynamicMainClass() throws Throwable {
+
+        // the biz module will start with dynamic mainClass specified in env parameters, which is org.example.Main2
+        BizOperation bizOperation = new BizOperation();
+        bizOperation.setOperationType(INSTALL);
+        bizOperation.getParameters().put(CONFIG_BIZ_URL, bizUrl5.toString());
+        bizOperation.setBizName("biz-demo");
+        bizOperation.setBizVersion("5.0.0");
+
+        Map<String, String> envs = Collections.singletonMap(Constants.BIZ_MAIN_CLASS,
+            "org.example.Main2");
+
+        ClientResponse response2 = installOperation(bizOperation, new String[] {}, envs);
+        assertEquals(SUCCESS, response2.getCode());
+        assertEquals("org.example.Main2", (new ArrayList<>(response2.getBizInfos())).get(0)
+            .getMainClass());
+
+        // but in fact, the biz module was packaged with mainClass as org.example.Main1
+        URL url = new URL(bizOperation.getParameters().get(Constants.CONFIG_BIZ_URL));
+        File file = ArkClient.createBizSaveFile(bizOperation.getBizName(),
+            bizOperation.getBizVersion());
+        try (InputStream inputStream = url.openStream()) {
+            FileUtils.copyInputStreamToFile(inputStream, file);
+        }
+        JarFile bizFile = new JarFile(file);
+        JarFileArchive jarFileArchive = new JarFileArchive(bizFile);
+        BizArchive bizArchive = new JarBizArchive(jarFileArchive);
+        assertEquals("org.example.Main1",
+            bizArchive.getManifest().getMainAttributes().getValue(Constants.MAIN_CLASS_ATTRIBUTE));
+        assertEquals("org.example.Main1",
+            bizArchive.getManifest().getMainAttributes().getValue(Constants.START_CLASS_ATTRIBUTE));
+    }
+
+    @Test
     public void testInstallBizFailed() throws Throwable {
         File bizFile = createBizSaveFile("biz-install-failed-demo", "1.0.0");
         copyInputStreamToFile(bizUrl1.openStream(), bizFile);
@@ -299,7 +356,7 @@ public class ArkClientTest extends BaseTest {
         when(biz.getBizName()).thenReturn("biz-install-failed-demo");
         when(biz.getBizVersion()).thenReturn("1.0.0");
         doThrow(new IllegalArgumentException()).when(biz).start(any(), any());
-        when(bizFactoryServiceMock.createBiz((File) any())).thenReturn(biz);
+        when(bizFactoryServiceMock.createBiz((File) any(), (BizConfig) any())).thenReturn(biz);
 
         // case1: not set AUTO_UNINSTALL_ENABLE
         try {
@@ -307,7 +364,7 @@ public class ArkClientTest extends BaseTest {
             setBizManagerService(bizManagerServiceMock);
             doThrow(new Exception()).when(biz).stop();
 
-            installBiz(bizFile, null);
+            installBiz(bizFile, new BizConfig());
             fail();
         } catch (Throwable e) {
             assertFalse(bizManagerServiceMock.getBiz("biz-install-failed-demo").isEmpty());
@@ -322,7 +379,7 @@ public class ArkClientTest extends BaseTest {
             setBizFactoryService(bizFactoryServiceMock);
             setBizManagerService(bizManagerServiceMock);
 
-            installBiz(bizFile, null);
+            installBiz(bizFile, new BizConfig());
             fail();
         } catch (Throwable e) {
             assertFalse(bizManagerServiceMock.getBiz("biz-install-failed-demo").isEmpty());
@@ -390,5 +447,25 @@ public class ArkClientTest extends BaseTest {
                 return "1";
             }
         }));
+    }
+
+    @Test
+    public void testInstallPlugin() throws Throwable {
+        PluginOperation pluginOperation = new PluginOperation();
+        pluginOperation.setPluginName("plugin-demo");
+        ClientResponse clientResponse = installPlugin(pluginOperation);
+        assertEquals(FAILED, clientResponse.getCode());
+
+        pluginOperation.setLocalFile(new File(samplePlugin.toURI()));
+        try {
+            installPlugin(pluginOperation);
+        } catch (Exception exception) {
+            assertTrue(exception instanceof ArkRuntimeException);
+        }
+
+        clientResponse = checkPlugin();
+        assertEquals(1, clientResponse.getPluginInfos().size());
+        clientResponse = checkPlugin("plugin-demo");
+        assertEquals(1, clientResponse.getPluginInfos().size());
     }
 }

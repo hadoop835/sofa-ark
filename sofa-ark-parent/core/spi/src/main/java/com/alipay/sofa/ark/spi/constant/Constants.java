@@ -113,6 +113,7 @@ public class Constants {
     public final static String       INJECT_PLUGIN_DEPENDENCIES                    = "inject-plugin-dependencies";
     public final static String       INJECT_EXPORT_PACKAGES                        = "inject-export-packages";
     public final static String       DECLARED_LIBRARIES                            = "declared-libraries";
+    public final static String       DEPENDENT_PLUGINS                             = "dependent-plugins";
 
     public static final String       BRANCH                                        = "commit-branch";
     public static final String       COMMIT_ID                                     = "commit-id";
@@ -171,6 +172,7 @@ public class Constants {
     /**
      * Event
      */
+    public final static String       BIZ_EVENT_TOPIC_AFTER_INVOKE_ALL_BIZ_START    = "AFTER-INVOKE-ALL-BIZ-START";
     public final static String       BIZ_EVENT_TOPIC_AFTER_INVOKE_BIZ_START        = "AFTER-INVOKE-BIZ-START";
     public final static String       BIZ_EVENT_TOPIC_AFTER_BIZ_FAILED              = "BIZ_EVENT_TOPIC_AFTER_BIZ_FAILED";
     public final static String       BIZ_EVENT_TOPIC_AFTER_INVOKE_BIZ_STOP         = "AFTER-INVOKE-BIZ-STOP";
@@ -203,11 +205,25 @@ public class Constants {
 
     public final static String       EMBED_STATIC_BIZ_IN_RESOURCE_ENABLE           = "sofa.ark.embed.static.biz.in.resource.enable";
     public final static String       ACTIVATE_NEW_MODULE                           = "activate.new.module";
+    public final static String       BIZ_MAIN_CLASS                                = "sofa.ark.biz.main.class";
+    public final static String       PLUGIN_CLASS_ISOLATION_ENABLE                 = "sofa.ark.plugin.class.isolation.enable";
+    public final static String       BIZ_SPECIFY_DEPENDENT_PLUGINS_ENABLE          = "sofa.ark.biz.specify.dependent.plugins.enable";
 
     /**
      * uninstall the biz if it starts up failed
      */
     public final static String       AUTO_UNINSTALL_WHEN_FAILED_ENABLE             = "sofa.ark.auto.uninstall.when.failed.enable";
+
+    /**
+     * unpack the biz when install
+     */
+    public final static String       UNPACK_BIZ_WHEN_INSTALL                       = "sofa.ark.unpack.biz.when.install";
+
+    /**
+     * support multiple version biz as activated
+     */
+    public final static String       ACTIVATE_MULTI_BIZ_VERSION_ENABLE             = "sofa.ark.activate.multi.biz.version.enable";
+
     /**
      * auto remove the biz instance in BizManagerService if it stops failed
      */
@@ -244,7 +260,9 @@ public class Constants {
     public final static String       CONFIG_PROTOCOL_ZOOKEEPER_HEADER              = "zookeeper://";
     public final static String       ZOOKEEPER_CONTEXT_SPLIT                       = "/";
     public final static String       CONFIG_INSTALL_BIZ_DIR                        = "com.alipay.sofa.ark.biz.dir";
+    public final static String       CONFIG_INSTALL_PLUGIN_DIR                     = "com.alipay.sofa.ark.plugin.dir";
     public final static String       CONFIG_BIZ_URL                                = "bizUrl";
+    public final static String       BIZ_EXTENSION_URLS                            = "bizExtensionUrls";
 
     public final static String       CONFIG_CONNECT_TIMEOUT                        = "com.alipay.sofa.ark.config.connect.timeout";
     public final static int          DEFAULT_CONFIG_CONNECT_TIMEOUT                = 20000;

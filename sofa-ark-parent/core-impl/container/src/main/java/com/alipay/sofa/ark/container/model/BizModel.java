@@ -39,14 +39,18 @@ import com.alipay.sofa.ark.spi.event.biz.BeforeBizStartupEvent;
 import com.alipay.sofa.ark.spi.event.biz.BeforeBizStopEvent;
 import com.alipay.sofa.ark.spi.model.Biz;
 import com.alipay.sofa.ark.spi.model.BizState;
+import com.alipay.sofa.ark.spi.model.Plugin;
 import com.alipay.sofa.ark.spi.service.biz.BizManagerService;
 import com.alipay.sofa.ark.spi.service.event.EventAdminService;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -57,6 +61,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static com.alipay.sofa.ark.spi.constant.Constants.BIZ_TEMP_WORK_DIR_RECYCLE_FILE_SUFFIX;
+import static com.alipay.sofa.ark.spi.constant.Constants.ACTIVATE_MULTI_BIZ_VERSION_ENABLE;
 import static com.alipay.sofa.ark.spi.constant.Constants.REMOVE_BIZ_INSTANCE_AFTER_STOP_FAILED;
 import static org.apache.commons.io.FileUtils.deleteQuietly;
 
@@ -112,6 +117,8 @@ public class BizModel implements Biz {
     private File                 bizTempWorkDir;
 
     private List<BizStateRecord> bizStateRecords               = new CopyOnWriteArrayList<>();
+
+    private Set<Plugin>          dependentPlugins              = new HashSet<>();
 
     public BizModel setBizName(String bizName) {
         AssertUtils.isFalse(StringUtils.isEmpty(bizName), "Biz Name must not be empty!");
@@ -231,6 +238,15 @@ public class BizModel implements Biz {
         bizStateRecords.add(new BizStateRecord(new Date(), bizState, reason, message));
     }
 
+    public Set<Plugin> getDependentPlugins() {
+        return dependentPlugins;
+    }
+
+    public BizModel setDependentPlugins(Set<Plugin> dependentPlugins) {
+        this.dependentPlugins = dependentPlugins;
+        return this;
+    }
+
     @Override
     public String getBizName() {
         return bizName;
@@ -322,6 +338,18 @@ public class BizModel implements Biz {
 
     private void doStart(String[] args, Map<String, String> envs) throws Throwable {
         AssertUtils.isTrue(bizState == BizState.RESOLVED, "BizState must be RESOLVED");
+
+        // support specify mainClass by env
+        if (envs != null) {
+            String mainClassFromEnv = envs.get(Constants.BIZ_MAIN_CLASS);
+            if (mainClassFromEnv != null) {
+                mainClass = mainClassFromEnv;
+                ArkLoggerFactory.getDefaultLogger().info(
+                    "Ark biz {} will start with main class {} from envs", getIdentity(),
+                    mainClassFromEnv);
+            }
+        }
+
         if (mainClass == null) {
             throw new ArkRuntimeException(String.format("biz: %s has no main method", getBizName()));
         }
@@ -342,33 +370,40 @@ public class BizModel implements Biz {
                     getIdentity(), (System.currentTimeMillis() - start));
             }
         } catch (Throwable e) {
-            setBizState(BizState.BROKEN, StateChangeReason.INSTALL_FAILED, e.getMessage());
+            setBizState(BizState.BROKEN, StateChangeReason.INSTALL_FAILED, getStackTraceAsString(e));
             eventAdminService.sendEvent(new AfterBizStartupFailedEvent(this, e));
             throw e;
         } finally {
             ClassLoaderUtils.popContextClassLoader(oldClassLoader);
         }
+
         BizManagerService bizManagerService = ArkServiceContainerHolder.getContainer().getService(
             BizManagerService.class);
 
+        // case0: active the first module as activated
+        if (bizManagerService.getActiveBiz(bizName) == null) {
+            setBizState(BizState.ACTIVATED, StateChangeReason.STARTED);
+            return;
+        }
+
+        // case1: support multiple version biz as activated: always activate the new version and keep the old module activated
+        boolean activateMultiBizVersion = Boolean.parseBoolean(ArkConfigs.getStringValue(
+            ACTIVATE_MULTI_BIZ_VERSION_ENABLE, "false"));
+        if (activateMultiBizVersion) {
+            setBizState(BizState.ACTIVATED, StateChangeReason.STARTED);
+            return;
+        }
+
+        // case2: always activate the new version and deactivate the old module according to ACTIVATE_NEW_MODULE config
         if (Boolean.getBoolean(Constants.ACTIVATE_NEW_MODULE)) {
             Biz currentActiveBiz = bizManagerService.getActiveBiz(bizName);
-            if (currentActiveBiz == null) {
-                setBizState(BizState.ACTIVATED, StateChangeReason.STARTED);
-            } else {
-                ((BizModel) currentActiveBiz).setBizState(BizState.DEACTIVATED,
-                    StateChangeReason.SWITCHED,
-                    String.format("switch to new biz %s", getIdentity()));
-                setBizState(BizState.ACTIVATED, StateChangeReason.STARTED,
-                    String.format("switch from old biz: %s", currentActiveBiz.getIdentity()));
-            }
+            ((BizModel) currentActiveBiz).setBizState(BizState.DEACTIVATED,
+                StateChangeReason.SWITCHED, String.format("switch to new biz %s", getIdentity()));
+            setBizState(BizState.ACTIVATED, StateChangeReason.STARTED,
+                String.format("switch from old biz: %s", currentActiveBiz.getIdentity()));
         } else {
-            if (bizManagerService.getActiveBiz(bizName) == null) {
-                setBizState(BizState.ACTIVATED, StateChangeReason.STARTED);
-            } else {
-                setBizState(BizState.DEACTIVATED, StateChangeReason.STARTED,
-                    "start but is deactivated");
-            }
+            // case3: always deactivate the new version and keep old module activated according to ACTIVATE_NEW_MODULE config
+            setBizState(BizState.DEACTIVATED, StateChangeReason.STARTED, "start but is deactivated");
         }
     }
 
@@ -413,7 +448,7 @@ public class BizModel implements Biz {
                 BizManagerService bizManagerService = ArkServiceContainerHolder.getContainer()
                     .getService(BizManagerService.class);
                 bizManagerService.unRegisterBiz(bizName, bizVersion);
-                setBizState(BizState.UNRESOLVED, StateChangeReason.STOPPED);
+                setBizState(BizState.STOPPED, StateChangeReason.STOPPED);
                 eventAdminService.sendEvent(new BeforeBizRecycleEvent(this));
                 urls = null;
                 denyImportPackages = null;
@@ -634,4 +669,46 @@ public class BizModel implements Biz {
 
         return targetPath;
     }
+
+    private static String getStackTraceAsString(Throwable throwable) {
+        StringWriter sw = new StringWriter();
+        PrintWriter pw = new PrintWriter(sw);
+        throwable.printStackTrace(pw);
+        return sw.toString();
+    }
+
+    /* export class and classloader relationship cache */
+    private ConcurrentHashMap<String, Plugin>       exportClassAndClassLoaderMap              = new ConcurrentHashMap<>();
+    private ConcurrentHashMap<String, Plugin>       exportNodeAndClassLoaderMap               = new ConcurrentHashMap<>();
+    private ConcurrentHashMap<String, Plugin>       exportStemAndClassLoaderMap               = new ConcurrentHashMap<>();
+
+    /* export cache and classloader relationship cache */
+    private ConcurrentHashMap<String, List<Plugin>> exportResourceAndClassLoaderMap           = new ConcurrentHashMap<>();
+    private ConcurrentHashMap<String, List<Plugin>> exportPrefixStemResourceAndClassLoaderMap = new ConcurrentHashMap<>();
+    private ConcurrentHashMap<String, List<Plugin>> exportSuffixStemResourceAndClassLoaderMap = new ConcurrentHashMap<>();
+
+    public ConcurrentHashMap<String, Plugin> getExportClassAndClassLoaderMap() {
+        return exportClassAndClassLoaderMap;
+    }
+
+    public ConcurrentHashMap<String, Plugin> getExportNodeAndClassLoaderMap() {
+        return exportNodeAndClassLoaderMap;
+    }
+
+    public ConcurrentHashMap<String, Plugin> getExportStemAndClassLoaderMap() {
+        return exportStemAndClassLoaderMap;
+    }
+
+    public ConcurrentHashMap<String, List<Plugin>> getExportResourceAndClassLoaderMap() {
+        return exportResourceAndClassLoaderMap;
+    }
+
+    public ConcurrentHashMap<String, List<Plugin>> getExportPrefixStemResourceAndClassLoaderMap() {
+        return exportPrefixStemResourceAndClassLoaderMap;
+    }
+
+    public ConcurrentHashMap<String, List<Plugin>> getExportSuffixStemResourceAndClassLoaderMap() {
+        return exportSuffixStemResourceAndClassLoaderMap;
+    }
+
 }
